@@ -1,10 +1,12 @@
-from slacker import Slacker
+from slacker import Slacker, Error as SlackerError
 import json
 import argparse
 import os
 import shutil
 import copy
+import time
 from datetime import datetime
+from requests.exceptions import HTTPError, ReadTimeout
 
 # This script finds all channels, private channels and direct messages
 # that your user participates in, downloads the complete history for
@@ -41,17 +43,42 @@ from datetime import datetime
 # slack.im
 #
 # channelId is the id of the channel/group/im you want to download history for.
-def getHistory(pageableObject, channelId, pageSize = 100):
+def getHistory(pageableObject, channelId, pageSize = 1000):
     messages = []
     lastTimestamp = None
 
     while(True):
-        response = pageableObject.history(
-            channel = channelId,
-            latest    = lastTimestamp,
-            oldest    = 0,
-            count     = pageSize
-        ).body
+        print('.', end='', flush=True)
+        try:
+            response = pageableObject.history(
+                channel = channelId,
+                latest    = lastTimestamp,
+                oldest    = 0,
+                count     = pageSize
+            ).body
+        except HTTPError as e:
+            print('')
+            print(e)
+            print('Status Code: {}'.format(e.response.status_code))
+            print('Content: {}'.format(e.response.content))
+            if e.response.status_code == 429:
+                retry_after = int(e.response.headers.get('Retry-After', '33'))
+                print("Backing off for {} seconds.".format(retry_after))
+                time.sleep(retry_after)
+                continue
+        except ReadTimeout as e:
+            print('')
+            print(e)
+            print("Backing off for 30 seconds.")
+            time.sleep(30)
+            continue
+        except Exception as e:
+            print('')
+            print("UNKNOWN EXCEPTION")
+            print(e)
+            print("Backing off for 30 seconds.")
+            time.sleep(30)
+            continue
 
         messages.extend(response['messages'])
 
@@ -141,6 +168,7 @@ def getChannels(slack, dryRun):
         parentDir = "channel"
         mkdir(parentDir)
         for channel in channels:
+            print("")
             print("getting history for channel {0}".format(channel['name']))
             channelDir = channel['name']
             mkdir( os.path.join( parentDir, channelDir ) )
